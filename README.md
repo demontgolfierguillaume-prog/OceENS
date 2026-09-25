@@ -65,92 +65,26 @@ Un utilisateur peut cumuler plusieurs rôles, chacun avec son propre périmètre
 
 ---
 
-## Installation et démarrage
+## Installation, démarrage et validation
 
 ### Prérequis
 
 - Python 3.12
-- Un fichier `.env` configuré (voir section [Configuration](#configuration))
+- Docker Desktop avec le backend WSL 2 sous Windows
+- un fichier `.env` créé à partir de `.env.example`
+- une clé LLM pour tester la génération des synthèses
 
-### Avec Docker Compose (recommandé)
+Le fichier `.env` contient des secrets locaux et ne doit jamais être commité.
 
-```bash
-docker compose up --build
-```
+La procédure de référence pour installer le projet, initialiser la base,
+démarrer l’application localement ou avec Docker et vérifier son
+fonctionnement est le [smoke test](docs/smoke-test.md).
 
-La base SQLite est persistée dans un répertoire local. Par défaut `./database/` ; pour pointer ailleurs, définir `LOCAL_DATABASE_DIR` dans `.env` ou dans l'environnement :
+Suivre cette procédure depuis un clone neuf avant toute modification touchant
+au démarrage, à la configuration, aux dépendances ou au conteneur.
 
-```env
-LOCAL_DATABASE_DIR=/chemin/vers/database
-```
-
-**Développement** — code source monté en volume (les modifications sont prises en compte sans rebuild), données de seed disponibles :
-
-```bash
-docker run -p 8000:8000 --env-file .env -v oceens_db:/app/database -v ./import:/app/import -v .:/app oceens:1.0
-```
-
-> Le `Dockerfile` inclut `--reload` dans la commande Uvicorn : uvicorn détecte les changements de fichiers et recharge l'application automatiquement lorsque le code source est monté via `-v .:/app`. Retirer `--reload` pour un déploiement en production.
-
-> La base SQLite est persistée dans le volume Docker `oceens_db` (`/app/database`).
-> Le fichier `.env` n'est jamais copié dans l'image : il est passé via `--env-file` au lancement.
-
-### Sans Docker (installation manuelle)
-
-### Étapes
-
-1. **Cloner le projet**
-
-   ```bash
-   git clone <url-du-repo>
-   cd OceENS
-   ```
-
-2. **Créer et activer un environnement virtuel**
-
-   ```bash
-   python -m venv env
-   env/scripts/activate        # Windows
-   source env/bin/activate     # Linux / macOS
-   ```
-
-3. **Installer les dépendances**
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-4. **Ajouter la base de données**
-   Créer un dossier `database/` puis y placer le fichier `db_oceens.db`, ou laisser `seed_all_if_necessary()` initialiser une base vide au premier démarrage.
-
-5. **Lancer l'application** :
-
-   ```bash
-   fastapi dev
-   ```
-
-   Ou directement avec Uvicorn :
-
-   ```bash
-   uvicorn main:app --host 0.0.0.0 --port 8000
-   ```
-
-   En production, `launch.sh` lance l'application et le daemon de synthèses dans des sessions `screen` séparées.
-
-6. **(Optionnel) Lancer le daemon de synthèses LLM** :
-
-   ```bash
-   python summaries_generator_daemon.py
-   ```
-
-   Ce processus tourne en boucle, écrit en base et contacte un service LLM externe : à ne lancer que lorsque c'est nécessaire.
-
-   > La variable d'environnement `RUN_SUMMARIES_DAEMON=1` dans le
-   > `.env` fait lancer automatiquement le daemon en process séparé au démarrage
-   > d'uvicorn (et l'arrête à la fermeture). A utiliser en production avec Docker.
-   > NB : `launch.sh` (sans docker) gère déjà le daemon dans sa propre session `screen`.
-
-7. Ouvrez votre navigateur à l'adresse **http://localhost:8000**.
+Le daemon de synthèses est un processus séparé. Il ne doit être lancé que
+lorsqu’une génération LLM doit être traitée.
 
 ---
 
@@ -568,16 +502,9 @@ validé (format + domaine autorisé) et les doublons sont refusés.
 
 ## Validation avant contribution
 
-Le dépôt ne contient pas de suite de tests automatisés ni de CI. Avant de proposer un changement :
-
-```bash
-python -m compileall -q main.py \
-  sondage_loader.py survey_loader_from_xlsx.py summaries_generator_daemon.py \
-  core models routers services
-git diff --check
-```
-
-Puis tester manuellement les routes concernées sur une base SQLite jetable (jamais une copie de production), avec les rôles et statuts de sondage pertinents.
+Avant de proposer un changement, exécuter intégralement le
+[smoke test](docs/smoke-test.md), puis tester les routes concernées sur une
+base SQLite jetable, jamais sur une copie de production.
 
 ---
 
