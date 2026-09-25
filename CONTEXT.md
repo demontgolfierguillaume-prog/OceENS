@@ -1,11 +1,13 @@
-# OcéEns
+# OcéENS
 
-Plateforme d'évaluation des enseignements de l'EPF : des sondages sont créés par filière, les étudiants y répondent, et les réponses sont exportées, visualisées et synthétisées.
+OcéENS is EPF's course-feedback platform. Teaching teams create surveys; students respond; authorized staff export, visualize, and summarize the results.
 
-## Langage
+## Language and product vocabulary
 
-### Authentification
+The application interface is primarily in French, while source code, issues, and project documentation use English. Keep the product's French terms *sondage* (a course-feedback survey) and *synthèse* (an LLM-generated summary of free-text responses) in English documentation when referring to those application concepts. Translate surrounding explanations into English; this is the intended boundary between product vocabulary and documentation language.
 
-**Connexion de développement** (`AUTH_MODE=dev`) :
-Connexion sans fournisseur d'identité : on choisit l'adresse mail d'un utilisateur et on est connecté en tant que lui, sans preuve d'identité. Elle n'existe que lorsque `AUTH_MODE=dev` et ne doit jamais servir en production.
-_À éviter_ : impersonation, usurpation, fake login
+## Authentication
+
+**Development login** (`AUTH_MODE=dev`) signs in as a selected user without an identity provider or proof of identity. It is intended only for local development and must never be exposed as a production authentication method.
+
+Avoid describing this feature as impersonation, spoofing, or fake login. Those terms imply a security capability or intent beyond this explicitly local development mode.

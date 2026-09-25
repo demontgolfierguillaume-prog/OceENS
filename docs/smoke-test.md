@@ -1,203 +1,166 @@
-# Smoke test manuel
+# Manual smoke test
 
-Le dépôt ne contient pas de suite de tests automatisés ni de CI (les premiers
-tests sont #85, la CI #78). Cette procédure se passe entièrement **à
-l'extérieur du processus** : on part d'un clone neuf, on lance l'application
-et on observe ce qu'elle répond et avec quel code de sortie.
+The project does not yet have a complete automated test suite or CI workflow. This procedure starts the application as an external process and checks its HTTP responses and exit codes.
 
-À dérouler avant de proposer un changement qui touche au démarrage, à la
-configuration, aux dépendances ou au conteneur.
+Run it before proposing changes to startup, configuration, dependencies, or the container. Start from a fresh clone when validating a release candidate.
 
-## Conventions selon le système
+## Prerequisites and shell conventions
 
-Les commandes sont données pour **Windows (PowerShell)** puis pour **macOS /
-Linux (bash)**. Seules quatre choses changent :
+Install [uv](https://docs.astral.sh/uv/) and Docker if running the container checks. The Python version is declared in `.python-version`; `uv` creates the project environment and installs the locked dependencies. The application can start without Entra credentials or an LLM key when using the development configuration in `.env.example`.
 
-| | Windows (PowerShell) | macOS / Linux (bash) |
-|---|---|---|
-| Interpréteur de l'environnement virtuel | `.venv\Scripts\python.exe` | `.venv/bin/python` |
-| Définir une variable pour une commande | `$env:VAR = "x"` puis `Remove-Item Env:VAR` | `VAR=x commande` |
-| Lire le code de sortie | `$LASTEXITCODE` | `echo $?` |
-| Copier / renommer un fichier | `Copy-Item`, `Rename-Item` | `cp`, `mv` |
+Commands are shown for Windows PowerShell and macOS/Linux Bash. PowerShell may block virtual-environment activation scripts by default; the examples use `uv run` and do not require activation.
 
-Les commandes appellent l'interpréteur **par son chemin** (`.venv\Scripts\python.exe`)
-plutôt que d'activer l'environnement : sous Windows, `Activate.ps1` est bloqué
-par défaut par la politique d'exécution de PowerShell, et ce n'est pas le sujet
-de ce test.
+## Static checks
 
-## Vérifications statiques
+From the repository root:
 
-Identique sur les deux systèmes (une seule ligne, sans continuation) :
-
-```
-python -m compileall -q main.py sondage_loader.py survey_loader_from_xlsx.py summaries_generator_daemon.py core models routers services
+```text
+uv run python -m compileall -q src/oceens
+uv run python -c "import oceens"
 git diff --check
 ```
 
-## 1. Démarrage local, sans credentials
+## 1. Local startup without external credentials
 
-Dans un clone neuf de la branche, avec un environnement virtuel vide.
+In a fresh clone, create the local configuration file, install the locked dependencies, and start the application.
 
 **Windows (PowerShell)**
 
 ```powershell
 Copy-Item .env.example .env
-py -3.12 -m venv .venv
-.venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\uvicorn.exe main:app --port 8000
+uv sync --frozen
+uv run uvicorn oceens.main:app --port 8000
 ```
 
-**macOS / Linux (bash)**
+**macOS / Linux (Bash)**
 
 ```bash
 cp .env.example .env
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/uvicorn main:app --port 8000
+uv sync --frozen
+uv run uvicorn oceens.main:app --port 8000
 ```
 
-Attendu, sans aucun credential Entra ni clé LLM :
+With the development settings from `.env.example`, no Entra account or LLM key is needed. Check these routes:
 
-| Route | Réponse |
-|---|---|
+| Request | Expected result |
+| --- | --- |
 | `GET /` | 200 |
 | `GET /dev/login` | 200 |
-| `GET /nope` | 303 vers `/` (middleware 404 → `/`) |
+| `GET /nope` | 303 redirect to `/` (the application redirects 404 responses) |
 
-Les logs de démarrage créent les tables, insèrent le jeu de démonstration et
-ne contiennent ni erreur ni trace d'exception.
+Startup logs should show database tables and demonstration data being initialized without errors or exception traces. Stop the server with Ctrl+C.
 
-## 2. Démarrage avec Docker
-
-Il faut un **démon Docker en cours d'exécution** — Docker Desktop sous Windows
-(avec le backend WSL 2) comme sous macOS, le démon natif sous Linux. La
-commande est la même partout :
-
-```
-docker compose up --build
-```
-
-Attendu : l'image se construit, le conteneur démarre sans redémarrer en
-boucle, et `/`, `/dev/login` et `/nope` répondent comme à l'étape 1.
-
-Sans `.env`, `docker compose` échoue avec `env file .env not found` — c'est
-voulu, la première commande d'un fork est la copie de `.env.example`.
-
-Pour arrêter et nettoyer :
-
-```
-docker compose down
-```
-
-## 3. Codes de sortie sur configuration invalide
-
-Une configuration de démarrage invalide doit sortir en **code 1**, pour qu'un
-superviseur ou une CI voie l'échec.
-
-Le `.env` doit être écarté pour les deux derniers cas : `load_dotenv()` y relirait
-`AUTH_MODE=dev` et l'application démarrerait normalement, en code 0.
+To check that startup is independent of the current working directory, change to a directory outside the clone and run the installed package using its project path:
 
 **Windows (PowerShell)**
 
 ```powershell
-# AUTH_MODE invalide
+uv run --project "C:\path\to\OceENS" python -c "import oceens"
+uv run --project "C:\path\to\OceENS" uvicorn oceens.main:app --port 8001
+```
+
+**macOS / Linux (Bash)**
+
+```bash
+uv run --project "/path/to/OceENS" python -c "import oceens"
+uv run --project "/path/to/OceENS" uvicorn oceens.main:app --port 8001
+```
+
+The import must succeed and the server must start using the clone's `.env`, templates, and root-level database directory. Stop it with Ctrl+C.
+
+## 2. Docker Compose startup
+
+Docker must be running. Docker Desktop with the WSL 2 backend is suitable on Windows; macOS and Linux need a running Docker daemon.
+
+Ensure the root `.env` exists as described above, then run:
+
+```text
+docker compose up --build
+```
+
+The container should remain running without a restart loop. The routes `/`, `/dev/login`, and `/nope` should return the same responses as in the local check. Compose requires `.env` because it is declared as an `env_file`.
+
+Stop with Ctrl+C, then clean up the containers:
+
+```text
+docker compose down
+```
+
+## 3. Invalid authentication configuration
+
+Invalid startup configuration should exit with code 1. Temporarily set the environment values below only in the test shell. For the missing-Entra and missing-session-key checks, move `.env` aside so its development defaults are not loaded; restore it after the checks.
+
+**Windows (PowerShell)**
+
+```powershell
+# Invalid authentication mode
 $env:AUTH_MODE = "bogus"
-.venv\Scripts\python.exe -c "import main"; $LASTEXITCODE   # 1
+uv run python -c "import oceens.main"; $LASTEXITCODE   # 1
 Remove-Item Env:AUTH_MODE
 
-# ENTRA_* manquantes, sans .env
+# Missing Entra settings, without .env
 Rename-Item .env .env.bak
 'AUTH_MODE','ENTRA_CLIENT_ID','ENTRA_CLIENT_SECRET','ENTRA_TENANT_ID' |
   ForEach-Object { Remove-Item "Env:$_" -ErrorAction SilentlyContinue }
-.venv\Scripts\python.exe -c "import main"; $LASTEXITCODE   # 1
+uv run python -c "import oceens.main"; $LASTEXITCODE   # 1
 
-# SECRET_KEY manquante en entra, sans .env
+# Missing session key in Entra mode
+$env:AUTH_MODE = "entra"
 $env:ENTRA_CLIENT_ID = "x"; $env:ENTRA_CLIENT_SECRET = "x"; $env:ENTRA_TENANT_ID = "x"
 Remove-Item Env:SECRET_KEY -ErrorAction SilentlyContinue
-.venv\Scripts\python.exe -c "import main"; $LASTEXITCODE   # 1
-'ENTRA_CLIENT_ID','ENTRA_CLIENT_SECRET','ENTRA_TENANT_ID' |
+uv run python -c "import oceens.main"; $LASTEXITCODE   # 1
+'AUTH_MODE','ENTRA_CLIENT_ID','ENTRA_CLIENT_SECRET','ENTRA_TENANT_ID' |
   ForEach-Object { Remove-Item "Env:$_" }
 Rename-Item .env.bak .env
 ```
 
-**macOS / Linux (bash)**
+**macOS / Linux (Bash)**
 
 ```bash
-# AUTH_MODE invalide
-AUTH_MODE=bogus .venv/bin/python -c "import main"; echo $?   # 1
+# Invalid authentication mode
+AUTH_MODE=bogus uv run python -c "import oceens.main"; echo $?   # 1
 
-# ENTRA_* manquantes, sans .env
+# Missing Entra settings, without .env
 mv .env .env.bak
 env -u AUTH_MODE -u ENTRA_CLIENT_ID -u ENTRA_CLIENT_SECRET -u ENTRA_TENANT_ID \
-  .venv/bin/python -c "import main"; echo $?   # 1
+  uv run python -c "import oceens.main"; echo $?   # 1
 
-# SECRET_KEY manquante en entra, sans .env
-env -u AUTH_MODE -u SECRET_KEY ENTRA_CLIENT_ID=x ENTRA_CLIENT_SECRET=x ENTRA_TENANT_ID=x \
-  .venv/bin/python -c "import main"; echo $?   # 1
+# Missing session key in Entra mode
+env -u SECRET_KEY AUTH_MODE=entra ENTRA_CLIENT_ID=x ENTRA_CLIENT_SECRET=x ENTRA_TENANT_ID=x \
+  uv run python -c "import oceens.main"; echo $?   # 1
 mv .env.bak .env
 ```
 
-Attendu : la ligne de log `INVALID AUTH_MODE 'bogus'` pour le premier cas,
-`MISSING ENTRA INFO. Please check .env` pour le deuxième,
-`MISSING SECRET_KEY. Required with AUTH_MODE=entra, please check .env` pour le
-troisième. En témoin, `AUTH_MODE=dev` sort en 0, même sans `SECRET_KEY`.
+Expected logs identify the invalid authentication mode, missing Entra settings, or missing session key. As a control, development mode starts without a session key.
 
-## 4. Absence de clé LLM
+## 4. No LLM key
 
-`.env.example` livre `LLM_API_KEY` **vide** : l'application démarre
-normalement, seules les synthèses sont indisponibles. Avec le daemon
-`summaries_generator_daemon.py` lancé, une demande de synthèse est marquée en
-erreur de configuration (`http_status` 500, « variable d'environnement
-absente ou vide ») et aucun appel n'est fait au fournisseur.
+The example configuration leaves the default LLM key empty. The web application should still start; only LLM-generated summaries are unavailable. If the summaries daemon is running, a requested summary should be marked with a configuration error (`http_status` 500, missing or empty environment variable), and no request should be sent to the provider.
 
-## 5. Avec une clé LLM
+## 5. With an LLM key (optional)
 
-Chaque étudiant récupère sa propre clé sur <https://locallm.mde.epf.fr> en se
-connectant avec son compte EPF, puis la renseigne dans son `.env` :
+Each student can obtain an individual EPF key at <https://locallm.mde.epf.fr/> and store it in their ignored `.env` file. Do not paste or commit the key.
 
-```
-LLM_API_KEY=<votre clé>
-```
-
-Vérification rapide, sans passer par l'interface. **La clé doit se trouver dans
-l'environnement de cette commande, et pas seulement dans le `.env`** :
-`load_dotenv()` est appelé par l'application, par le daemon et par le module
-d'authentification, mais pas par `services/llm_client.py`, seul module importé
-ici. Sans le préfixe ci-dessous, la commande lève `LLMConfigError` quel que
-soit le contenu du `.env`.
-
-La ligne `python -c` tient sur une ligne et est identique sur les deux
-systèmes ; seuls le chemin de l'interpréteur et la façon de définir la
-variable changent.
+For a direct client check, the key must be present in the command's environment. The `llm_client` module does not itself load `.env`.
 
 **Windows (PowerShell)**
 
 ```powershell
-$env:LLM_API_KEY = "<votre clé>"
-.venv\Scripts\python.exe -c "from types import SimpleNamespace; from services import llm_client as c; p = SimpleNamespace(name='Ollama EPF', api_type='ollama', base_url='https://locallm.mde.epf.fr/ollama', api_key_env='LLM_API_KEY', default_model='gemma4:26b'); print(c.check_model(p, 'gemma4:26b')); print(c.ping_generation(p, 'gemma4:26b'))"
+$env:LLM_API_KEY = "<your key>"
+uv run python -c "from types import SimpleNamespace; from oceens.services import llm_client as c; p = SimpleNamespace(name='Ollama EPF', api_type='ollama', base_url='https://locallm.mde.epf.fr/ollama', api_key_env='LLM_API_KEY', default_model='gemma4:26b'); print(c.check_model(p, 'gemma4:26b')); print(c.ping_generation(p, 'gemma4:26b'))"
 Remove-Item Env:LLM_API_KEY
 ```
 
-**macOS / Linux (bash)**
+**macOS / Linux (Bash)**
 
 ```bash
-LLM_API_KEY=<votre clé> .venv/bin/python -c "from types import SimpleNamespace; from services import llm_client as c; p = SimpleNamespace(name='Ollama EPF', api_type='ollama', base_url='https://locallm.mde.epf.fr/ollama', api_key_env='LLM_API_KEY', default_model='gemma4:26b'); print(c.check_model(p, 'gemma4:26b')); print(c.ping_generation(p, 'gemma4:26b'))"
+LLM_API_KEY='<your key>' uv run python -c "from types import SimpleNamespace; from oceens.services import llm_client as c; p = SimpleNamespace(name='Ollama EPF', api_type='ollama', base_url='https://locallm.mde.epf.fr/ollama', api_key_env='LLM_API_KEY', default_model='gemma4:26b'); print(c.check_model(p, 'gemma4:26b')); print(c.ping_generation(p, 'gemma4:26b'))"
 ```
 
-Attendu : `True`, puis `(True, None, None)`. `check_model` seul ne suffit pas —
-la liste des modèles répond encore normalement avec un compte sans crédit,
-seul l'appel de génération le révèle. Avec une valeur vide, ou sans la
-variable, la même commande lève `LLMConfigError` : c'est le comportement de
-l'étape 4.
+Expected output is `True`, followed by `(True, None, None)`. Checking the model list alone does not confirm that the provider can generate text; the ping performs a minimal generation request.
 
-Ensuite, bout en bout : demander la génération des synthèses d'un sondage avec
-`summaries_generator_daemon.py` lancé. Cette moitié-là n'a pas besoin du
-préfixe : le daemon, lui, lit le `.env`. Les lignes passent de `http_status` 0
-à 200, une à la fois (le daemon est séquentiel), et la synthèse s'affiche en
-HTML. Ne jamais committer la clé : `.env` est ignoré par Git.
+For an end-to-end check, run `uv run oceens-summaries-daemon` in a separate terminal, request summary generation for a test survey, and confirm that a summary is produced. The daemon loads `.env` at startup. Stop it after the check and remove test summaries using the application interface.
 
-## Ensuite
+## After the smoke test
 
-Tester manuellement les routes concernées par le changement, sur une base
-SQLite jetable (jamais une copie de production), avec les rôles et les
-statuts de sondage pertinents.
+Manually test routes affected by the change using a disposable SQLite database, with relevant user roles and survey states. Never use a production database copy.

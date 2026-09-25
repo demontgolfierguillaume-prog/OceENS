@@ -1,0 +1,13 @@
+source_roots = ["src", "tests"]
+exclude = ["**/*__pycache__", "**/*egg-info", "**/docs", "**/venv", "**/.venv"]
+forbid_circular_dependencies = true
+root_module = "allow"
+
+[[modules]]
+path = "oceens.*"
+
+[[modules]]
+path = "<root>"
+
+[[interfaces]]
+expose = ["[^_][^.]*(\\.[^_][^.]*)*"]
