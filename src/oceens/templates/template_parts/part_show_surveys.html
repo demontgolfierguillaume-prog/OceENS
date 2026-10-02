@@ -335,12 +335,13 @@
     {% set summaries_count = survey_summaries.get('summaries_count', 0) %}
     {% set summaries_done = survey_summaries.get('summaries_done', 0) %}
     {% set summaries_error = survey_summaries.get('summaries_error', 0) %}
-    {% if summaries_count > 0 and summaries_count == summaries_done + summaries_error %}
+    {% set summaries_eta = survey_summaries.get('estimated_seconds_left', 0) %}
+    {% if survey_summaries.get('summaries_finished', false) %}
     <button class="row-icon row-icon-summaries row-icon-summaries-done"
       title="Génération des résumés terminée : {{ summaries_done }}/{{ summaries_count }} ({{ summaries_error }} erreur(s))">🤖</button>
     {% else %}
     <button class="row-icon row-icon-summaries row-icon-summaries-processing" onclick="window.location.reload();"
-      title="Génération des résumés en cours : {{ summaries_done }}/{{ summaries_count }} ({{ summaries_error }} erreur(s))">🤖</button>
+      title="Génération des résumés en cours : {{ summaries_done }}/{{ summaries_count }} ({{ summaries_error }} erreur(s)) — temps estimé : {{ summaries_eta }} s">🤖</button>
     {% endif %}
     <form method="post" action="/api/surveys/{{ survey['survey_id'] }}/destroy-summaries" class="destroy-summaries"
       onsubmit="return confirm('Supprimer définitivement les résumés déjà générés ? Cette action est irréversible.');">

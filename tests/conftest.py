@@ -10,6 +10,11 @@ processus sans credentials Entra : les tests tournent en `AUTH_MODE=dev`.
 
 import os
 import tempfile
+import dotenv
+
+# Tests must never load settings from a developer's local .env file. Patch the
+# function before application modules import it.
+dotenv.load_dotenv = lambda *args, **kwargs: None
 
 os.environ["LOCAL_DATABASE_DIR"] = tempfile.mkdtemp(prefix="oceens-tests-")
 os.environ["AUTH_MODE"] = "dev"
