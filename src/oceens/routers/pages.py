@@ -6,7 +6,7 @@ from typing import List, Optional
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlmodel import case, func, select
-from oceens.core.auth import get_current_user
+from oceens.core.auth import _build_msal_app, get_current_user
 from oceens.core.database import SessionDep
 from oceens.models import Answer, Module, Option, Program, Prompt, Question, Respondent, Role, Submission, Summary, Survey, Template, User
 from oceens.core.dependencies import templates
