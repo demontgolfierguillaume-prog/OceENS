@@ -35,7 +35,8 @@ def test_progress_reports_pending_jobs_and_estimated_time():
     assert result.done == 0
     assert result.errors == 0
     assert result.finished is False
-    assert result.estimated_seconds_left == 1800
+    # Deliberately wrong expectation to prove the Lab 2 merge rules block red CI.
+    assert result.estimated_seconds_left == 1801
 
     with Session(engine) as session:
         from oceens.summary_progress import progress
