@@ -12,9 +12,25 @@ from oceens.models import Answer, Module, Option, Program, Prompt, Question, Res
 from oceens.core.dependencies import templates
 from oceens.core.security import VALID_ROLES, can_duplicate_survey, check_role, get_allowed_campuses, get_campus_manager_program_codes, get_results_program_codes, get_student_dashboard_redirect, parse_role_scopes, parse_rprm_formations, require_roles, role_to_dashboard_slug
 from oceens.services.helpers import build_survey_prefill, filter_surveys, get_avg_stats, get_dashboard_navigation, get_stats_by_survey, teacher_sort_key
+from oceens.summary_progress import progress as summary_progress
 
 router = APIRouter(tags=["Pages"])
 dashboard_router = APIRouter(tags=["Dashboard"], prefix="/dashboard")
+
+
+def _summary_progress_by_survey(session, surveys):
+    summaries = {}
+    for survey in surveys:
+        survey_id = survey["survey_id"]
+        result = summary_progress(session, survey_id)
+        summaries[survey_id] = {
+            "summaries_count": result.total,
+            "summaries_done": result.done,
+            "summaries_error": result.errors,
+            "summaries_finished": result.finished,
+            "estimated_seconds_left": result.estimated_seconds_left,
+        }
+    return summaries
 
 
 # ┌─ Route : Page d'accueil (version app.py conservée) ──────────────┐
@@ -358,18 +374,7 @@ async def program_manager_dashboard(
         {"prompt_id": p.prompt_id, "description": p.description} for p in  session.exec(select(Prompt)).all()
     ]
 
-    summary_rows = session.exec(select(Summary.survey_id,func.count(Summary.summary_id),func.count(Summary.summary_text),func.sum(case(
-   (
-       Summary.http_status == 0,0
-   ),
-   (
-       Summary.http_status == 200,0
-   ),
-   else_=1
-))).group_by(Summary.survey_id)).all()
-
-    summaries = { s[0]:
-         {"summaries_count": s[1], "summaries_done": s[2], "summaries_error": s[3]} for s in  summary_rows }
+    summaries = _summary_progress_by_survey(session, surveys)
 
 
     context = {
@@ -799,18 +804,7 @@ async def facilitator_dashboard(
         {"prompt_id": p.prompt_id, "description": p.description} for p in  session.exec(select(Prompt)).all()
     ]
 
-    summary_rows = session.exec(select(Summary.survey_id,func.count(Summary.summary_id),func.count(Summary.summary_text),func.sum(case(
-   (
-       Summary.http_status == 0,0
-   ),
-   (
-       Summary.http_status == 200,0
-   ),
-   else_=1
-))).group_by(Summary.survey_id)).all()
-
-    summaries = { s[0]:
-         {"summaries_count": s[1], "summaries_done": s[2], "summaries_error": s[3]} for s in  summary_rows }
+    summaries = _summary_progress_by_survey(session, surveys)
 
     context = {
         "user": user,
@@ -977,18 +971,7 @@ async def admin_dashboard(
         {"prompt_id": p.prompt_id, "description": p.description} for p in  session.exec(select(Prompt)).all()
     ]
 
-    summary_rows = session.exec(select(Summary.survey_id,func.count(Summary.summary_id),func.count(Summary.summary_text),func.sum(case(
-    (
-        Summary.http_status == 0,0
-    ),
-    (
-        Summary.http_status == 200,0
-    ),
-    else_=1
-    ))).group_by(Summary.survey_id)).all()
-
-    summaries = { s[0]:
-         {"summaries_count": s[1], "summaries_done": s[2], "summaries_error": s[3]} for s in  summary_rows }
+    summaries = _summary_progress_by_survey(session, surveys)
 
     context = {
         "user": user,
