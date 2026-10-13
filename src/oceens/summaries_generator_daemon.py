@@ -19,11 +19,14 @@ service externe.
 """
 
 import json
+import atexit
+from contextlib import contextmanager
 import logging
 import signal
 import sys
 import time
 
+import posthog
 from dotenv import load_dotenv
 from markdown_it import MarkdownIt
 from requests.exceptions import RequestException
@@ -31,6 +34,7 @@ from sqlmodel import Session, select
 
 from oceens.core.database import engine
 from oceens.models import Answer, LLMProvider, Prompt, Submission, Summary
+from oceens.posthog_telemetry import read_posthog_settings, start_telemetry
 from oceens.services.llm_client import (
     LLMConfigError,
     ask_model,
@@ -68,6 +72,21 @@ def signal_handler(signal_number, frame):
 
 
 signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
+
+@contextmanager
+def _posthog_context(client, survey_id=None):
+    """Identify daemon events and tag events emitted while processing a survey."""
+    if client is None:
+        yield
+        return
+
+    with posthog.new_context(client=client):
+        posthog.identify_context("oceens-summaries")
+        if survey_id is not None:
+            posthog.tag("survey_id", survey_id)
+        yield
 
 
 def get_provider(session, prompt_row):
@@ -302,6 +321,14 @@ def main():
         level=logging.INFO,
         format="%(levelname)s:     %(message)s",
     )
+    telemetry = start_telemetry(
+        read_posthog_settings(),
+        "oceens-summaries",
+        logger_names=("uvicorn.error",),
+    )
+    client = telemetry.client if telemetry else None
+    if telemetry:
+        atexit.register(telemetry.shutdown)
 
     md = MarkdownIt()  # convertisseur markdown → HTML pour le rendu final
     http_session = build_cache_session("cache_llm.db")
@@ -310,33 +337,37 @@ def main():
     # durée du processus.
     checked_models = {}
 
-    logger.info("Daemon de synthèses démarré.")
+    with _posthog_context(client):
+        logger.info("Daemon de synthèses démarré.")
+        while True:
+            with Session(engine) as session:
+                summary_row = session.exec(
+                    select(Summary).where(Summary.http_status == 0)
+                ).first()
 
-    while True:
-        with Session(engine) as session:
-            summary_row = session.exec(
-                select(Summary).where(Summary.http_status == 0)
-            ).first()
+                if not summary_row:
+                    time.sleep(POLL_INTERVAL_SECONDS)
+                    continue
 
-            if not summary_row:
-                time.sleep(POLL_INTERVAL_SECONDS)
-                continue
-
-            try:
-                process_summary(session, summary_row, http_session, md, checked_models)
-            except Exception:
-                # Filet de sécurité : une exception inattendue ne doit ni
-                # arrêter le daemon, ni laisser la ligne bloquée à 0.
-                logger.exception(
-                    "Erreur inattendue sur la synthèse %s", summary_row.summary_id
-                )
-                session.rollback()
-                finish_summary(
-                    session,
-                    summary_row,
-                    STATUS_CONFIG_ERROR,
-                    metadata_text="Erreur interne pendant la génération.",
-                )
+                with _posthog_context(client, summary_row.survey_id):
+                    try:
+                        process_summary(
+                            session, summary_row, http_session, md, checked_models
+                        )
+                    except Exception:
+                        # Filet de sécurité : une exception inattendue ne doit ni
+                        # arrêter le daemon, ni laisser la ligne bloquée à 0.
+                        logger.exception(
+                            "Erreur inattendue sur la synthèse %s",
+                            summary_row.summary_id,
+                        )
+                        session.rollback()
+                        finish_summary(
+                            session,
+                            summary_row,
+                            STATUS_CONFIG_ERROR,
+                            metadata_text="Erreur interne pendant la génération.",
+                        )
 
 
 if __name__ == "__main__":

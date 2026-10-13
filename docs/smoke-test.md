@@ -1,9 +1,9 @@
 # Manual smoke test
 
-The repository's automated tests are still few (`uv run pytest`; the dev sign-in's are
-#85) and it has no CI (#78), so nothing upstream exercises behaviour. This procedure runs
-entirely **outside the process**: start from a fresh clone, start the application, and
-observe what it answers and with which exit code.
+GitHub Actions runs `uv run pytest` and the package architecture checks. This procedure
+adds a local check of the installed application, its startup configuration, and the
+container: start from a fresh clone, start the application, and observe what it answers
+and with which exit code.
 
 Run it before proposing a change that touches startup, configuration, dependencies or the
 container.

@@ -19,6 +19,7 @@ import sys
 import subprocess
 from pathlib import Path
 
+import posthog
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request
 from fastapi.responses import RedirectResponse
@@ -27,11 +28,17 @@ from sqlmodel import Session, select
 from starlette.middleware.sessions import SessionMiddleware
 import uvicorn
 
-from oceens.core.auth import AUTH_MODE, SECRET_KEY, router as auth_router
+from oceens.core.auth import (
+    AUTH_MODE,
+    SECRET_KEY,
+    get_current_user,
+    router as auth_router,
+)
 from oceens.core.database import create_db_and_tables, engine
 from oceens.core.dependencies import logger
 from oceens.core.seed import DEFAULT_PROVIDER_NAME, seed_all_if_necessary
 from oceens.models import LLMProvider
+from oceens.posthog_telemetry import read_posthog_settings, start_telemetry
 from oceens.services.llm_client import config_problems
 
 from oceens.routers import (
@@ -124,26 +131,34 @@ async def lifespan(app: FastAPI):
     du daemon de synthèses en parallèle (si RUN_SUMMARIES_DAEMON est activé).
     Après le `yield` (à l'arrêt) : arrêt du daemon puis journalisation.
     """
-    logger.info("Initialisation de la base de données...")
-    create_db_and_tables()
-    seed_all_if_necessary()
-    _warn_about_default_provider()
+    telemetry = start_telemetry(
+        read_posthog_settings(), "oceens", logger_names=("uvicorn",)
+    )
+    app.state.posthog_client = telemetry.client if telemetry else None
+    daemon_process = None
+    try:
+        logger.info("Initialisation de la base de données...")
+        create_db_and_tables()
+        seed_all_if_necessary()
+        _warn_about_default_provider()
 
-    # Lancer le daemon de synthèses en parallèle d'uvicorn (optionnel)
-    daemon_process = _maybe_start_summaries_daemon()
+        # Lancer le daemon de synthèses en parallèle d'uvicorn (optionnel)
+        daemon_process = _maybe_start_summaries_daemon()
 
-    yield
+        yield
+    finally:
+        # Arrêter proprement le daemon à la fermeture de l'application
+        if daemon_process is not None:
+            logger.info("Arrêt du daemon de synthèses...")
+            daemon_process.terminate()  # SIGTERM : le daemon quitte sa boucle
+            try:
+                daemon_process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                daemon_process.kill()  # forcer si toujours vivant après 10s
 
-    # Arrêter proprement le daemon à la fermeture de l'application
-    if daemon_process is not None:
-        logger.info("Arrêt du daemon de synthèses...")
-        daemon_process.terminate()  # SIGTERM : le daemon quitte sa boucle
-        try:
-            daemon_process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            daemon_process.kill()  # forcer si toujours vivant après 10s
-
-    logger.info("Fermeture de la connexion...")
+        logger.info("Fermeture de la connexion...")
+        if telemetry:
+            telemetry.shutdown()
 
 
 def create_app():
@@ -156,7 +171,22 @@ def create_app():
         lifespan=lifespan,
     )
 
-    # SessionMiddleware (authentification)
+    @app.middleware("http")
+    async def posthog_request_context(request: Request, call_next):
+        """Attach the signed-in user's identity to this request's events."""
+        client = getattr(request.app.state, "posthog_client", None)
+        if client is None:
+            return await call_next(request)
+
+        with posthog.new_context(client=client):
+            user = get_current_user(request)
+            email = user.get("email") if user else None
+            if email:
+                posthog.identify_context(email)
+            return await call_next(request)
+
+    # This is registered after posthog_request_context so its request sees the
+    # session populated by SessionMiddleware.
     app.add_middleware(
         SessionMiddleware,
         secret_key=SECRET_KEY,
@@ -196,6 +226,13 @@ def create_app():
     for module in (prompts, survey_templates, llm_providers, llm_prices, llm_costs):
         app.include_router(module.backend_router)
     # └────────────────────────────────────────────────────────────────────┘
+
+    @app.middleware("http")
+    async def send_revision(request: Request, call_next):
+        """Identifie l'image qui répond, même pendant un redéploiement."""
+        response = await call_next(request)
+        response.headers["X-Revision"] = os.getenv("REVISION", "unknown")
+        return response
 
     return app
 

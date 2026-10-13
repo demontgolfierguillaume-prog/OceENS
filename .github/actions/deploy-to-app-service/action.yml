@@ -1,0 +1,154 @@
+name: Deploy to App Service
+description: Write one environment's settings, deploy an existing image and verify its revision.
+inputs:
+  image:
+    description: GHCR image tagged with its full commit SHA.
+    required: true
+  resource-group:
+    description: Azure resource group.
+    required: true
+  app-name:
+    description: Azure App Service app name.
+    required: true
+  secret-key:
+    description: Environment's session signing secret.
+    required: true
+  dev-login-key:
+    description: Environment's dev sign-in key.
+    required: true
+  mistral-api-key:
+    description: Student's Mistral key.
+    required: true
+  provider-base-url:
+    description: Direct Mistral endpoint or production's instructor-provided endpoint.
+    required: true
+  posthog-project-token:
+    description: Optional PostHog project token; enables all PostHog settings when present.
+    required: false
+  posthog-host:
+    description: PostHog ingestion host for the environment.
+    required: false
+  posthog-environment:
+    description: Environment name attached to PostHog events.
+    required: false
+outputs:
+  url:
+    description: Azure's actual default URL for the deployed app.
+    value: ${{ steps.app-url.outputs.url }}
+runs:
+  using: composite
+  steps:
+    - name: Write the environment settings without printing secrets
+      shell: bash
+      env:
+        RESOURCE_GROUP: ${{ inputs.resource-group }}
+        APP_NAME: ${{ inputs.app-name }}
+        SECRET_KEY: ${{ inputs.secret-key }}
+        DEV_LOGIN_KEY: ${{ inputs.dev-login-key }}
+        MISTRAL_API_KEY: ${{ inputs.mistral-api-key }}
+        PROVIDER_BASE_URL: ${{ inputs.provider-base-url }}
+        POSTHOG_PROJECT_TOKEN: ${{ inputs.posthog-project-token }}
+        POSTHOG_HOST: ${{ inputs.posthog-host }}
+        POSTHOG_ENVIRONMENT: ${{ inputs.posthog-environment }}
+      run: |
+        for setting in RESOURCE_GROUP APP_NAME SECRET_KEY DEV_LOGIN_KEY MISTRAL_API_KEY PROVIDER_BASE_URL; do
+          if [ -z "${!setting}" ]; then
+            echo "Required setting $setting is missing" >&2
+            exit 1
+          fi
+        done
+        posthog_settings=(
+          "POSTHOG_PROJECT_TOKEN="
+          "POSTHOG_HOST="
+          "POSTHOG_ENVIRONMENT="
+        )
+        if [ -n "$POSTHOG_PROJECT_TOKEN" ]; then
+          for setting in POSTHOG_HOST POSTHOG_ENVIRONMENT; do
+            if [ -z "${!setting}" ]; then
+              echo "Required setting $setting is missing" >&2
+              exit 1
+            fi
+          done
+          posthog_settings=(
+            "POSTHOG_PROJECT_TOKEN=$POSTHOG_PROJECT_TOKEN"
+            "POSTHOG_HOST=$POSTHOG_HOST"
+            "POSTHOG_ENVIRONMENT=$POSTHOG_ENVIRONMENT"
+          )
+        fi
+        az webapp config appsettings set \
+          --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output none \
+          --settings \
+            AUTH_MODE=dev \
+            "DEV_LOGIN_KEY=$DEV_LOGIN_KEY" \
+            "SECRET_KEY=$SECRET_KEY" \
+            "MISTRAL_API_KEY=$MISTRAL_API_KEY" \
+            DEFAULT_PROVIDER_API_TYPE=openai \
+            "DEFAULT_PROVIDER_BASE_URL=$PROVIDER_BASE_URL" \
+            DEFAULT_PROVIDER_MODEL=ministral-14b-latest \
+            DEFAULT_PROVIDER_KEY_ENV=MISTRAL_API_KEY \
+            RUN_SUMMARIES_DAEMON=1 \
+            LOCAL_DATABASE_DIR=/app/database \
+            WEBSITES_ENABLE_APP_SERVICE_STORAGE=false \
+            WEBSITES_PORT=8000 \
+            "${posthog_settings[@]}"
+        az webapp config set --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" \
+          --always-on true --output none
+
+    - name: Configure the app to pull the image
+      shell: bash
+      env:
+        RESOURCE_GROUP: ${{ inputs.resource-group }}
+        APP_NAME: ${{ inputs.app-name }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        az webapp config container set \
+          --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output none \
+          --container-image-name "$IMAGE" --container-registry-url https://ghcr.io
+        configured=$(az webapp config show --resource-group "$RESOURCE_GROUP" \
+          --name "$APP_NAME" --query linuxFxVersion --output tsv)
+        if [ "$configured" != "DOCKER|$IMAGE" ]; then
+          echo "The configured image does not match $IMAGE" >&2
+          exit 1
+        fi
+        az webapp restart --resource-group "$RESOURCE_GROUP" --name "$APP_NAME" --output none
+
+    - name: Resolve the app's default URL
+      id: app-url
+      shell: bash
+      env:
+        RESOURCE_GROUP: ${{ inputs.resource-group }}
+        APP_NAME: ${{ inputs.app-name }}
+      run: |
+        hostname=$(az webapp show --resource-group "$RESOURCE_GROUP" \
+          --name "$APP_NAME" --query defaultHostName --output tsv)
+        if [ -z "$hostname" ]; then
+          echo "Azure did not return the app's default hostname" >&2
+          exit 1
+        fi
+        echo "url=https://$hostname" >> "$GITHUB_OUTPUT"
+
+    - name: Wait for a 200 response from the deployed revision
+      shell: bash
+      env:
+        APP_URL: ${{ steps.app-url.outputs.url }}
+        IMAGE: ${{ inputs.image }}
+      run: |
+        url="$APP_URL/dev/login"
+        revision="${IMAGE##*:}"
+        # Twice the slowest measured first start (350 s) in the course example.
+        limit=700
+        start=$(date +%s)
+        while true; do
+          answer=$(curl -s -o /dev/null -w '%{http_code} %header{x-revision}' --max-time 30 "$url" || true)
+          elapsed=$(( $(date +%s) - start ))
+          if [ "$answer" = "200 $revision" ]; then
+            echo "$url answers from commit $revision after $elapsed s"
+            exit 0
+          fi
+          echo "After $elapsed s: ${answer:-no response}; waiting for 200 $revision"
+          if [ "$elapsed" -ge "$limit" ]; then
+            echo "The deployed revision did not answer within $limit s" >&2
+            exit 1
+          fi
+          sleep 15
+        done
