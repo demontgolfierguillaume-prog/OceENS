@@ -16,6 +16,7 @@ from oceens.services.llm_client import (
     list_models,
     ping_generation,
 )
+from oceens.posthog_telemetry import capture_exception
 
 backend_router = APIRouter(tags=["Backend"], prefix="/backend")
 
@@ -430,18 +431,21 @@ def test_provider(request: Request, provider_id: int, session: SessionDep):
     try:
         models = list_models(provider)
     except LLMConfigError as error:
+        capture_exception(error)
         # Mauvaise config (clÃ© absente/non autorisÃ©e, type d'API inconnu)
         logger.warning("Test fournisseur %s : config invalide : %s", provider.name, error)
         return JSONResponse(
             {"ok": False, "error": "Configuration invalide (voir les logs serveur)."}
         )
     except RequestException as error:
+        capture_exception(error)
         # Serveur injoignable, timeout, rÃ©ponse HTTP en erreur
         logger.warning("Test fournisseur %s : serveur injoignable : %s", provider.name, error)
         return JSONResponse(
             {"ok": False, "error": "Serveur injoignable (voir les logs serveur)."}
         )
-    except Exception:
+    except Exception as error:
+        capture_exception(error)
         # Filet de sÃ©curitÃ© : rien ne doit fuiter vers le navigateur
         logger.exception("Test fournisseur %s : erreur inattendue", provider.name)
         return JSONResponse(
@@ -461,16 +465,19 @@ def test_provider(request: Request, provider_id: int, session: SessionDep):
     try:
         ok, kind, message = ping_generation(provider, model)
     except LLMConfigError as error:
+        capture_exception(error)
         logger.warning("Ping fournisseur %s : config invalide : %s", provider.name, error)
         return JSONResponse(
             {"ok": False, "error": "Configuration invalide (voir les logs serveur)."}
         )
     except RequestException as error:
+        capture_exception(error)
         logger.warning("Ping fournisseur %s : serveur injoignable : %s", provider.name, error)
         return JSONResponse(
             {"ok": False, "error": "Serveur injoignable (voir les logs serveur)."}
         )
-    except Exception:
+    except Exception as error:
+        capture_exception(error)
         logger.exception("Ping fournisseur %s : erreur inattendue", provider.name)
         return JSONResponse(
             {"ok": False, "error": "Erreur inattendue (voir les logs serveur)."}

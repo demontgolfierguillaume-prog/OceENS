@@ -11,6 +11,7 @@ from sqlmodel import delete, func, select, Session
 from oceens.core.database import SessionDep
 from oceens.models import Respondent, Survey, User
 from oceens.core.security import can_manage_survey, require_roles
+from oceens.posthog_telemetry import capture_exception
 
 router = APIRouter(tags=["API"], prefix="/api")
 
@@ -140,7 +141,8 @@ def add_survey_students(
             added_count += 1
 
         session.commit()
-    except Exception:
+    except Exception as error:
+        capture_exception(error)
         session.rollback()
         return JSONResponse(
             content={"error": "Impossible d'ajouter les étudiants au sondage."},
@@ -197,6 +199,7 @@ def remove_survey_student(
         session.delete(respondent)
         session.commit()
     except Exception as e:
+        capture_exception(e)
         session.rollback()
         return JSONResponse(
             content={"error": "Impossible de retirer cet étudiant du sondage. ({e})"},

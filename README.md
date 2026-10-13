@@ -744,6 +744,11 @@ sets its PostHog EU host and environment name. With all three settings empty, re
 stays disabled. The staging exception proof, production log proof, saved query and
 Error Ledger are student actions later in the lab.
 
+Caught operational failures are reported before their existing rollback, fallback or
+response. The explicit process client preserves the request email or daemon survey
+context, and reporting stays off without configuration. See
+[the capture inventory and validation](docs/lab3-caught-exceptions.md).
+
 ## Deployment checklist for real-user environments
 
 - [ ] `.env` created with the real Azure credentials and a dedicated `SECRET_KEY`
