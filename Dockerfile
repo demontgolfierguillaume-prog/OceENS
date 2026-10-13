@@ -30,4 +30,14 @@ RUN uv sync --frozen
 # --env-file .env au lancement (docker run) ou via les variables d'environnement.
 
 # `oceens` est le point d'entrée installé avec le paquet (uvicorn sur 0.0.0.0:8000).
+# App Service termine TLS avant le conteneur. Uvicorn doit croire son proxy
+# pour construire les liens HTTPS. Le daemon partage la base du serveur web.
+ENV FORWARDED_ALLOW_IPS="*" \
+    RUN_SUMMARIES_DAEMON=1
+EXPOSE 8000
+
+# Le déploiement attend une réponse de cette révision précise.
+ARG REVISION=unknown
+ENV REVISION=$REVISION
+
 CMD ["oceens"]

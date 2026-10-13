@@ -696,7 +696,55 @@ duplicates are refused.
 
 ---
 
-## Deployment checklist
+## Deploying this course fork on Azure App Service
+
+The fork uses `.github/workflows/architecture.yml` and two Linux App Service apps
+on one Basic B1 plan in France Central. Provisioning and the settings needed before
+the first run are described in [docs/lab3-deployment-setup.md](docs/lab3-deployment-setup.md).
+
+- A push to this fork's default branch runs `architecture` and `test` independently.
+  `deploy to staging` needs both jobs to pass. Pull requests run the checks only.
+- Staging builds an image tagged with the full commit SHA on GHCR, or reuses it if
+  that tag already exists. The image contains both the seeded demo answers and
+  `RUN_SUMMARIES_DAEMON=1`: `oceens` starts `oceens-summaries` as a child process,
+  reproducing both processes started by `launch.sh`.
+- Deployment writes the GitHub Environment's settings to its app and waits up to
+  700 seconds for `/dev/login` to return HTTP 200 with `X-Revision` equal to the
+  image's commit. An old container still serving requests does not validate the
+  new deployment. The timeout follows the [course example's measured 350-second
+  slowest first start](https://github.com/EPF-MDE/MATHutrice/pull/100), doubled.
+- A manual run on the default branch promotes an existing image. It reads this
+  workflow's push runs, newest first, and selects the first whose `deploy to staging`
+  job succeeded. Failed, cancelled, pending or missing staging jobs are logged and
+  skipped, including runs on older pages. No successful staging deploy means no
+  promotion. Production is never built in this workflow.
+
+Both apps use `AUTH_MODE=dev` as required for the course's generated data, with
+separate `DEV_LOGIN_KEY` and `SECRET_KEY` secrets for each environment. This is
+the course exception to the real-user deployment checklist below. Production
+initially calls Mistral directly; step 5 switches only production to the instructor's
+endpoint through its `DEFAULT_PROVIDER_BASE_URL` secret. Staging always uses
+`https://api.mistral.ai/v1`. Test the existing provider row in `/backend/providers`
+after either change; the workflow does not create a second provider.
+
+### Storage and quota limits
+
+The SQLite database lives in `/app/database` on the container's local disk.
+`WEBSITES_ENABLE_APP_SERVICE_STORAGE=false` keeps it off App Service's `/home`
+network share, where SQLite locking is unsuitable. Deployments and platform
+restarts can discard surveys, answers and generated summaries; startup seeds the
+reference and demo data again. These apps are for the course, with generated data.
+
+Staging, production and a laptop using the same Mistral key share its account quota.
+A local run can therefore make production receive HTTP 429. No secret value belongs
+in the repository, the README or workflow logs.
+
+When a `POSTHOG_PROJECT_TOKEN` is configured in an environment, the deployment also
+sets its PostHog EU host and environment name. With all three settings empty, reporting
+stays disabled. The staging exception proof, production log proof, saved query and
+Error Ledger are student actions later in the lab.
+
+## Deployment checklist for real-user environments
 
 - [ ] `.env` created with the real Azure credentials and a dedicated `SECRET_KEY`
       (required unless `AUTH_MODE=dev`, otherwise the application refuses to start)
@@ -713,8 +761,8 @@ duplicates are refused.
 
 ## Validating a change
 
-The automated tests are still few (`uv run pytest`) and there is no CI, so behaviour is
-mostly on you: before proposing a change, run the tests, then the
+GitHub Actions runs `uv run pytest` and both architecture checks on pushes and pull
+requests. Before proposing a change, run the tests, then the
 manual procedure in **[docs/smoke-test.md](docs/smoke-test.md)**: static checks, startup
 from a fresh clone, Docker, exit codes on invalid configuration, and the LLM key. Then
 test the routes your change touches, on a throwaway SQLite database (never a copy of

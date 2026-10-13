@@ -3,10 +3,15 @@ name: Architecture Check
 on:
   push:
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   test:
     name: test
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Check out the commit
@@ -28,6 +33,7 @@ jobs:
 
   architecture:
     name: architecture
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - name: Check out the commit
@@ -49,3 +55,125 @@ jobs:
 
       - name: Check package cycles
         run: uv run python scripts/check_cycles.py
+
+  deploy-staging:
+    name: deploy to staging
+    needs: [architecture, test]
+    if: >-
+      github.event_name == 'push' &&
+      github.repository == 'demontgolfierguillaume-prog/OceENS' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    environment:
+      name: staging
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: Build one image per commit and push it to GHCR
+        id: image
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:$GITHUB_SHA"
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          if docker manifest inspect "$image" > /dev/null 2>&1; then
+            echo "$image already exists; reusing it"
+          else
+            docker build \
+              --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+              --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+              --build-arg "REVISION=$GITHUB_SHA" -t "$image" .
+            docker push "$image"
+          fi
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to Azure with staging's identity
+        uses: azure/login@v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to staging and wait for this revision
+        id: deploy
+        uses: ./.github/actions/deploy-to-app-service
+        with:
+          image: ${{ steps.image.outputs.image }}
+          resource-group: ${{ vars.AZURE_RESOURCE_GROUP }}
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          secret-key: ${{ secrets.SECRET_KEY }}
+          dev-login-key: ${{ secrets.DEV_LOGIN_KEY }}
+          mistral-api-key: ${{ secrets.MISTRAL_API_KEY }}
+          provider-base-url: https://api.mistral.ai/v1
+          posthog-project-token: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          posthog-host: https://eu.i.posthog.com
+          posthog-environment: staging
+
+  last-green-staging:
+    name: find staging's last green deploy
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.repository == 'demontgolfierguillaume-prog/OceENS' &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      image: ${{ steps.find.outputs.image }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Read push runs and skip every unsuccessful staging deploy
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEPLOY_BRANCH: ${{ github.event.repository.default_branch }}
+        run: python scripts/find_staging_image.py
+
+  promote-production:
+    name: promote to production
+    needs: last-green-staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: ${{ steps.deploy.outputs.url }}
+    steps:
+      # This checkout supplies the deploy action; it builds no application image.
+      - uses: actions/checkout@v7.0.1
+      - name: Log in to Azure with production's identity
+        uses: azure/login@v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy staging's successful image to production
+        id: deploy
+        uses: ./.github/actions/deploy-to-app-service
+        with:
+          image: ${{ needs.last-green-staging.outputs.image }}
+          resource-group: ${{ vars.AZURE_RESOURCE_GROUP }}
+          app-name: ${{ vars.AZURE_WEBAPP_NAME }}
+          secret-key: ${{ secrets.SECRET_KEY }}
+          dev-login-key: ${{ secrets.DEV_LOGIN_KEY }}
+          mistral-api-key: ${{ secrets.MISTRAL_API_KEY }}
+          provider-base-url: ${{ secrets.DEFAULT_PROVIDER_BASE_URL || 'https://api.mistral.ai/v1' }}
+          posthog-project-token: ${{ secrets.POSTHOG_PROJECT_TOKEN }}
+          posthog-host: https://eu.i.posthog.com
+          posthog-environment: production
