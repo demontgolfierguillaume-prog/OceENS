@@ -34,7 +34,7 @@ from sqlmodel import Session, select
 
 from oceens.core.database import engine
 from oceens.models import Answer, LLMProvider, Prompt, Submission, Summary
-from oceens.posthog_telemetry import read_posthog_settings, start_telemetry
+from oceens.posthog_telemetry import capture_exception, read_posthog_settings, start_telemetry
 from oceens.services.llm_client import (
     LLMConfigError,
     ask_model,
@@ -208,6 +208,7 @@ def process_summary(session, summary_row, http_session, md, checked_models):
                 provider, model, session=http_session
             )
         except (LLMConfigError, RequestException) as error:
+            capture_exception(error)
             # Non mémorisé : la panne peut être transitoire.
             logger.exception(
                 "Vérification du modèle %s impossible chez %s", model, provider.name
@@ -265,12 +266,14 @@ def process_summary(session, summary_row, http_session, md, checked_models):
             timeout=REQUEST_TIMEOUT_SECONDS,
         )
     except LLMConfigError as error:
+        capture_exception(error)
         logger.error("Fournisseur %s mal configuré : %s", provider.name, error)
         finish_summary(
             session, summary_row, STATUS_CONFIG_ERROR, metadata_text=str(error)
         )
         return
     except RequestException as error:
+        capture_exception(error)
         logger.warning("Appel au fournisseur %s en échec : %s", provider.name, error)
         finish_summary(
             session, summary_row, STATUS_TIMEOUT, metadata_text=str(error)
@@ -354,7 +357,8 @@ def main():
                         process_summary(
                             session, summary_row, http_session, md, checked_models
                         )
-                    except Exception:
+                    except Exception as error:
+                        capture_exception(error)
                         # Filet de sécurité : une exception inattendue ne doit ni
                         # arrêter le daemon, ni laisser la ligne bloquée à 0.
                         logger.exception(

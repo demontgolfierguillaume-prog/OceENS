@@ -13,6 +13,23 @@ from opentelemetry.sdk.resources import Resource
 from posthog import Posthog
 
 
+# Set by the process lifespan/main, never by import or the SDK global client.
+_process_client: Posthog | None = None
+
+
+def capture_exception(error: BaseException) -> None:
+    """Report a caught failure in the current request/survey context, if enabled."""
+    client = _process_client
+    if client is None:
+        return
+    try:
+        client.capture_exception(error)
+    except Exception:
+        # Telemetry must not change a rollback, fallback or HTTP response.
+        # Keep the export failure's details out of logs (they may contain secrets).
+        logging.getLogger(__name__).warning("PostHog could not report a caught exception")
+
+
 @dataclass(frozen=True)
 class PostHogSettings:
     project_token: str
@@ -29,6 +46,9 @@ class Telemetry:
 
     def shutdown(self) -> None:
         """Detach and flush telemetry providers before the process exits."""
+        global _process_client
+        if _process_client is self.client:
+            _process_client = None
         for logger in self.attached_loggers:
             logger.removeHandler(self.logging_handler)
         self.logger_provider.shutdown()
@@ -62,7 +82,9 @@ def start_telemetry(
     logger_names: tuple[str, ...],
 ) -> Telemetry | None:
     """Start PostHog and OTLP logging only when all settings are configured."""
+    global _process_client
     if settings is None:
+        _process_client = None
         return None
 
     client = Posthog(
@@ -96,4 +118,5 @@ def start_telemetry(
     for logger in loggers:
         logger.addHandler(handler)
 
+    _process_client = client
     return Telemetry(client, provider, handler, tuple(loggers))

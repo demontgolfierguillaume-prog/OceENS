@@ -8,6 +8,7 @@ from oceens.core.auth import get_current_user
 from oceens.core.database import SessionDep
 from oceens.models import LLMProvider, Prompt, Role, Summary, Survey, User
 from oceens.core.dependencies import templates
+from oceens.posthog_telemetry import capture_exception
 
 # Deux routeurs : /api pour les mutations (form/fetch), /backend pour les pages
 api_router = APIRouter(tags=["API"], prefix="/api")
@@ -204,6 +205,7 @@ def create_prompt(
         session.add(prompt)
         session.commit()
     except Exception as e:
+        capture_exception(e)
         session.rollback()
         return RedirectResponse(
             url=f"/backend/prompts/new?error=Erreur+lors+de+la+création.",
@@ -264,6 +266,7 @@ def update_prompt(
         session.add(prompt)
         session.commit()
     except Exception as e:
+        capture_exception(e)
         session.rollback()
         return RedirectResponse(
             url=f"/backend/prompts/{prompt_id}/edit?error=Erreur+lors+de+la+mise+à+jour.",
@@ -306,7 +309,8 @@ def delete_prompt(request: Request, prompt_id: int, session: SessionDep):
     try:
         session.delete(prompt)
         session.commit()
-    except Exception:
+    except Exception as error:
+        capture_exception(error)
         session.rollback()
         return JSONResponse({"error": "Erreur lors de la suppression."}, status_code=500)
 

@@ -9,6 +9,7 @@ from oceens.models import Answer, Question, Submission, Summary
 from oceens.core.dependencies import logger
 from oceens.core import check_survey_access_and_status
 from oceens.core.security import parse_rprm_formations, require_roles
+from oceens.posthog_telemetry import capture_exception
 
 router = APIRouter(tags=["API"], prefix="/api")
 
@@ -98,6 +99,7 @@ def generate_summaries(request: Request, survey_id: int, request_data: SummaryRe
         session.exec(insert(Summary),params=rows_to_insert)
         session.commit()
     except Exception as e:
+        capture_exception(e)
         # En cas d'erreur, tout annuler pour ne pas laisser le sondage bloqué
         session.rollback()
         return JSONResponse(
@@ -152,6 +154,7 @@ def destroy_summaries(request: Request, survey_id: int, session: SessionDep):
                 )
         session.commit()
     except Exception as e:
+        capture_exception(e)
         session.rollback()
         return JSONResponse(
             content={"error": f"Impossible de retirer ces résumés. ({e})"},

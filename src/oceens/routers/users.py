@@ -11,6 +11,7 @@ from oceens.core.database import SessionDep
 from oceens.models import Program, Respondent, Role, Survey, User
 from oceens.core.security import check_role, parse_role_scopes, require_roles, VALID_ROLES
 from typing import List
+from oceens.posthog_telemetry import capture_exception
 
 router = APIRouter(tags=["API"], prefix="/api")
 
@@ -72,7 +73,8 @@ def create_user(request: Request, body: UserCreate, session: SessionDep):
         session.flush()  # pour obtenir l'user_id généré
         session.add(Role(user_id=user.user_id, role="student"))
         session.commit()
-    except Exception:
+    except Exception as error:
+        capture_exception(error)
         session.rollback()
         return JSONResponse(
             content={"error": "Impossible de créer cet utilisateur."}, status_code=500

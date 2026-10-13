@@ -38,7 +38,7 @@ from oceens.core.database import create_db_and_tables, engine
 from oceens.core.dependencies import logger
 from oceens.core.seed import DEFAULT_PROVIDER_NAME, seed_all_if_necessary
 from oceens.models import LLMProvider
-from oceens.posthog_telemetry import read_posthog_settings, start_telemetry
+from oceens.posthog_telemetry import capture_exception, read_posthog_settings, start_telemetry
 from oceens.services.llm_client import config_problems
 
 from oceens.routers import (
@@ -153,7 +153,8 @@ async def lifespan(app: FastAPI):
             daemon_process.terminate()  # SIGTERM : le daemon quitte sa boucle
             try:
                 daemon_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
+            except subprocess.TimeoutExpired as error:
+                capture_exception(error)
                 daemon_process.kill()  # forcer si toujours vivant après 10s
 
         logger.info("Fermeture de la connexion...")

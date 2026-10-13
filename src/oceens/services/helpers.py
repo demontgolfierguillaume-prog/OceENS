@@ -7,6 +7,7 @@ import unicodedata
 from typing import Dict, List, Optional
 from fastapi.responses import JSONResponse
 from sqlmodel import Session, delete, func, select
+from oceens.posthog_telemetry import capture_exception
 from oceens.models import Answer, Module, Respondent, Role, Stat, StatValue, Submission, Summary, Survey, User
 
 
@@ -186,6 +187,7 @@ def delete_survey_with_relations(session: Session, survey_id: int) -> None:
         session.commit()
 
     except Exception as e:
+            capture_exception(e)
             session.rollback()
             return JSONResponse(
                 content={"error": "Impossible de retirer ce sondage. ({e})"},

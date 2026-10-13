@@ -53,6 +53,10 @@ def test_start_telemetry_wires_project_environment_and_otlp_logs(monkeypatch):
         def __init__(self, token, **kwargs):
             created["client"] = (token, kwargs)
             self.closed = False
+            self.caught = []
+
+        def capture_exception(self, error):
+            self.caught.append(error)
 
         def shutdown(self):
             self.closed = True
@@ -122,7 +126,13 @@ def test_start_telemetry_wires_project_environment_and_otlp_logs(monkeypatch):
         assert active.logging_handler in root.handlers
         assert active.logging_handler in service_logger.handlers
 
+        error = RuntimeError("transaction failed")
+        telemetry.capture_exception(error)
+        assert active.client.caught == [error]
+
         active.shutdown()
+        telemetry.capture_exception(RuntimeError("after shutdown"))
+        assert active.client.caught == [error]
 
         assert active.client.closed
         assert active.logger_provider.closed
@@ -211,3 +221,52 @@ def test_summaries_context_identifies_daemon_and_tags_survey(monkeypatch):
 
     assert identities == ["oceens-summaries"]
     assert tags == [("survey_id", 17)]
+
+
+
+def test_caught_exception_reporting_is_disabled_without_a_client(monkeypatch):
+    monkeypatch.setattr(telemetry, "_process_client", None)
+    telemetry.capture_exception(RuntimeError("disabled"))
+
+
+def test_reporting_failure_does_not_replace_application_error(monkeypatch, caplog):
+    class FailingClient:
+        def capture_exception(self, error):
+            raise RuntimeError("export failure with potentially sensitive details")
+
+    monkeypatch.setattr(telemetry, "_process_client", FailingClient())
+    telemetry.capture_exception(ValueError("business failure"))
+    assert "PostHog could not report a caught exception" in caplog.text
+    assert "potentially sensitive details" not in caplog.text
+
+
+@pytest.mark.parametrize("identity,survey_id", [("student@example.edu", None), ("oceens-summaries", 17)])
+def test_caught_exception_uses_sdk_context_identity_and_environment(monkeypatch, identity, survey_id):
+    events = []
+    # Synchronous + drop before send: exercises SDK event construction without
+    # a worker, credentials or any network transmission.
+    client = posthog.Posthog(
+        "phc-test-token",
+        sync_mode=True,
+        enable_exception_autocapture=False,
+        super_properties={"environment": "staging"},
+        before_send=lambda event: events.append(event) or None,
+    )
+    monkeypatch.setattr(telemetry, "_process_client", client)
+    try:
+        with posthog.new_context(client=client):
+            posthog.identify_context(identity)
+            if survey_id is not None:
+                posthog.tag("survey_id", survey_id)
+            try:
+                raise RuntimeError("handled failure")
+            except RuntimeError as error:
+                telemetry.capture_exception(error)
+        assert len(events) == 1
+        assert events[0]["event"] == "$exception"
+        assert events[0]["distinct_id"] == identity
+        assert events[0]["properties"]["environment"] == "staging"
+        if survey_id is not None:
+            assert events[0]["properties"]["survey_id"] == survey_id
+    finally:
+        client.shutdown()

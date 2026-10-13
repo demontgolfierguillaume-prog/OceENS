@@ -14,6 +14,7 @@ passées ne doit pas changer rétroactivement.
 
 import logging
 
+from oceens.posthog_telemetry import capture_exception
 from oceens.models import Setting
 
 logger = logging.getLogger("uvicorn.error")
@@ -58,7 +59,8 @@ def get_usd_to_eur(session):
 
     try:
         rate = float(str(raw).replace(",", "."))
-    except ValueError:
+    except ValueError as error:
+        capture_exception(error)
         logger.warning(
             "Taux %s illisible (%r) : repli sur %s", USD_TO_EUR_KEY, raw, DEFAULT_USD_TO_EUR
         )
